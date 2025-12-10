@@ -16,6 +16,10 @@
 | 10 | Low | Unknown config fields silently ignored | `cmp validate` |
 | 11 | Low | Invalid regex patterns not validated at config time | `cmp validate` |
 | 12 | Low | GitHub error messages leak internal API details | `cmp check` |
+| 13 | Medium | Config file contents leaked in parse error messages | `cmp validate` |
+| 14 | Low | ReDoS-vulnerable regex patterns accepted | `cmp validate` |
+| 15 | Low | README is empty/undocumented | Documentation |
+| 16 | Low | `cmp` with no command exits with code 1 | `cmp` |
 
 ---
 
@@ -371,6 +375,116 @@ The first line exposes internal API details that aren't useful to end users.
 
 ---
 
+### Bug #13: Config file contents leaked in parse error messages
+
+**Severity:** Medium
+**Command:** `cmp validate`
+
+**Description:**
+When a non-TOML file is passed as config, the parse error message includes the file contents. This could leak sensitive information if a user accidentally points to a secrets file.
+
+**Steps to Reproduce:**
+```bash
+echo "SECRET_KEY=supersecret123" > /tmp/secrets.env
+cmp validate --config /tmp/secrets.env
+```
+
+**Expected:** Generic error message like "Failed to parse config file" without exposing file contents.
+
+**Actual:**
+```
+✗ Failed to parse config: Unexpected character, expecting string, number, datetime, boolean, inline array or inline table at row 1, col 13, pos 12:
+1> SECRET_KEY=supersecret123
+               ^
+```
+
+The sensitive file content (`SECRET_KEY=supersecret123`) is exposed in the error message.
+
+---
+
+### Bug #14: ReDoS-vulnerable regex patterns accepted
+
+**Severity:** Low
+**Command:** `cmp validate`
+
+**Description:**
+The config accepts regex patterns that are vulnerable to Regular Expression Denial of Service (ReDoS). These patterns can cause catastrophic backtracking when matched against certain inputs.
+
+**Steps to Reproduce:**
+```bash
+cat << 'EOF' > /tmp/redos.toml
+[branch]
+pattern = "^(a+)+$"
+
+[ticket]
+pattern = "^(a|a)+$"
+EOF
+
+cmp validate --config /tmp/redos.toml
+```
+
+**Expected:** Warning about potentially dangerous regex patterns.
+
+**Actual:**
+```
+✓ Config is valid
+...
+  pattern: ^(a+)+$
+```
+
+These patterns could cause the CLI to hang when checking PRs with specially crafted branch names.
+
+---
+
+### Bug #15: README is empty/undocumented
+
+**Severity:** Low
+**Command:** N/A (Documentation)
+
+**Description:**
+The published npm package has an essentially empty README file containing only the package name.
+
+**Steps to Reproduce:**
+```bash
+cat $(npm root -g)/check-my-process/README.md
+```
+
+**Expected:** Documentation explaining how to use the CLI, config file format, available checks, etc.
+
+**Actual:**
+```
+# check-my-process
+```
+
+---
+
+### Bug #16: `cmp` with no command exits with code 1
+
+**Severity:** Low
+**Command:** `cmp`
+
+**Description:**
+Running `cmp` without any command shows the help text but exits with code 1 (error). This is inconsistent - showing help should typically exit with code 0.
+
+**Steps to Reproduce:**
+```bash
+cmp
+echo "Exit code: $?"
+```
+
+**Expected:** Exit code 0 when displaying help.
+
+**Actual:**
+```
+Usage: cmp [options] [command]
+...
+Exit code: 1
+```
+
+Note: `cmp --help` correctly exits with code 0.
+
+---
+
 ## Recommendations
 
 1. **Implement the `init` command** - This is a core feature that users expect to work.
@@ -379,7 +493,7 @@ The first line exposes internal API details that aren't useful to end users.
    - `default_severity` is "error" or "warning"
    - Numeric fields are positive integers
    - Regex patterns are valid
-   - `check_in` values are from allowed list
+   - `check_in` values are from allowed list ("title", "branch", "body")
    - Warn on unknown fields/sections
 
 3. **Improve error messages** -
@@ -387,5 +501,17 @@ The first line exposes internal API details that aren't useful to end users.
    - Validate PR number is positive
    - Validate repo format more strictly
    - Suppress internal API details from error output
+   - Don't leak file contents in parse error messages
 
 4. **Add explicit "using defaults" message** - When no config file is found, clearly indicate that defaults are being used rather than saying "Config is valid".
+
+5. **Add documentation** - The README should explain:
+   - How to install and use the CLI
+   - Config file format and all available options
+   - Available checks and what they do
+   - Examples of common configurations
+
+6. **Security hardening** -
+   - Consider adding ReDoS detection for regex patterns
+   - Sanitize file contents from error messages
+   - Add timeout for regex matching operations
